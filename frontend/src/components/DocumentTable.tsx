@@ -33,7 +33,7 @@ export function DocumentTable({
                 {doc.filename}
               </Link>
             </td>
-            <td>{formatBytes(doc.size)}</td>
+            <td className="mono">{formatBytes(doc.size)}</td>
             <td>
               <StatusBadge status={doc.status} />
             </td>
@@ -54,7 +54,7 @@ export function DocumentTable({
             <td>
               <MethodBadge method={doc.method} />
             </td>
-            <td>{relativeTime(doc.created_at)}</td>
+            <td className="mono">{relativeTime(doc.created_at)}</td>
             <td>
               {onDelete && (
                 <button

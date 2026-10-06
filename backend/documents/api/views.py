@@ -27,7 +27,7 @@ from pipeline.probe import build_probe
 from pipeline.registry import default_registry
 
 from ..models import Document, Job
-from ..services import get_content, get_document, list_documents, search_blocks
+from ..services import CONTENT_FORMATS, get_content, get_document, list_documents, search_blocks
 from .serializers import BlockSerializer, DocumentSerializer
 
 
@@ -187,15 +187,27 @@ def config_view(request):
 
 
 class _IgnoreFormatNegotiation(DefaultContentNegotiation):
-    """content_view uses ``?format=json|markdown|text`` for its OWN purposes;
-    prevent DRF from treating that query param as a renderer hint (which would
-    raise Http404 for unknown formats)."""
+    """content_view uses ``?format=json|markdown|text|html|csv`` for its OWN
+    purposes; prevent DRF from treating that query param as a renderer hint
+    (which would raise Http404 for unknown formats)."""
 
     def select_renderer(self, request, renderers, format_suffix):
         return (renderers[0], renderers[0].media_type)
 
 
+CONTENT_TYPES = {
+    "markdown": "text/markdown; charset=utf-8",
+    "text": "text/plain; charset=utf-8",
+    "html": "text/html; charset=utf-8",
+    "csv": "text/csv; charset=utf-8",
+}
+CONTENT_EXTENSIONS = {"markdown": "md", "text": "txt", "html": "html", "csv": "csv", "json": "json"}
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
 def content_view(request, pk):
+    from pathlib import Path
+
     from ..models import Document
 
     try:
@@ -211,6 +223,13 @@ def content_view(request, pk):
         )
 
     fmt = request.query_params.get("format", "json")
+    if fmt not in CONTENT_FORMATS:
+        raise ContractError(
+            "bad_request",
+            f"format must be one of: {', '.join(CONTENT_FORMATS)}.",
+            400,
+        )
+
     page_param = request.query_params.get("page")
     page = None
     if page_param is not None:
@@ -230,14 +249,19 @@ def content_view(request, pk):
             "page_count": doc.page_count,
             "blocks": BlockSerializer(blocks, many=True).data,
         }
-        return Response(payload)
+        response = Response(payload)
+    else:
+        from django.http import HttpResponse
 
-    if fmt not in ("markdown", "text"):
-        raise ContractError("bad_request", "format must be json, markdown or text.", 400)
-    content = get_content(doc, fmt, page=page)
-    from django.http import HttpResponse
+        content = get_content(doc, fmt, page=page)
+        response = HttpResponse(content, content_type=CONTENT_TYPES[fmt])
 
-    return HttpResponse(content, content_type="text/plain; charset=utf-8")
+    if request.query_params.get("download", "").lower() in _TRUTHY:
+        ext = CONTENT_EXTENSIONS[fmt]
+        base = Path(doc.filename).stem or "document"
+        response["Content-Disposition"] = f'attachment; filename="{base}.{ext}"'
+
+    return response
 
 
 content_view.content_negotiation_class = _IgnoreFormatNegotiation

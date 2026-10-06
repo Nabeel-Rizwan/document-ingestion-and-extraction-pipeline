@@ -22,6 +22,17 @@ async function parseBody(response: Response): Promise<unknown> {
   return response.text();
 }
 
+/** Turn an HTTP status + parsed body into an ApiError (contract envelope aware). */
+export function toApiError(status: number, body: unknown): ApiError {
+  if (isErrorBody(body)) {
+    return new ApiError(status, body.error.code, body.error.message);
+  }
+  if (typeof body === "string") {
+    return new ApiError(status, "bad_request", body);
+  }
+  return new ApiError(status, "bad_request", "Request failed.");
+}
+
 export async function apiRequest<T>(
   path: string,
   init?: RequestInit,
@@ -36,13 +47,7 @@ export async function apiRequest<T>(
   const body = await parseBody(response);
 
   if (!response.ok) {
-    if (isErrorBody(body)) {
-      throw new ApiError(response.status, body.error.code, body.error.message);
-    }
-    if (typeof body === "string") {
-      throw new ApiError(response.status, "bad_request", body);
-    }
-    throw new ApiError(response.status, "bad_request", "Request failed.");
+    throw toApiError(response.status, body);
   }
 
   return body as T;

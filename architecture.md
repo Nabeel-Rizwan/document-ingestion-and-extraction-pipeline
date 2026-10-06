@@ -17,8 +17,9 @@ Users upload `.pdf` and `.docx` files through a browser. The backend:
 5. Exposes the results through a REST API, a Server-Sent Events (SSE) stream
    for live progress, and an OpenAI-style agent-tool interface.
 
-The UI renders extracted content (JSON / Markdown / plain text, per page),
-streams live processing progress, and lets users search with highlighted hits.
+The UI renders extracted content in **five formats** (JSON / Markdown / plain
+text / HTML / CSV, per page) with copy and download, streams live processing
+progress, and lets users search with highlighted hits.
 
 ---
 
@@ -63,11 +64,13 @@ There are four runtime pieces:
 ### 2.3 Request lifecycle (end to end)
 
 1. **Upload** — the browser streams each file to `POST /api/documents/` (max 3
-   concurrent). The view hashes (SHA-256) and enforces `MAX_UPLOAD_BYTES`
-   while writing a temp file. It sniffs the type with `pipeline/probe.py`.
-   Duplicate content (same hash) returns the existing document; otherwise a
-   `Document` row **and** a queued `Job` are created in one transaction
-   (202 Accepted).
+   concurrent) via `XMLHttpRequest` so the upload panel can show a real
+   per-file **byte-progress bar**; on acceptance the row switches to the
+   document's live **processing progress**. The view hashes (SHA-256) and
+   enforces `MAX_UPLOAD_BYTES` while writing a temp file. It sniffs the type
+   with `pipeline/probe.py`. Duplicate content (same hash) returns the existing
+   document; otherwise a `Document` row **and** a queued `Job` are created in
+   one transaction (202 Accepted).
 2. **Queue** — the worker claims jobs with
    `SELECT … FOR UPDATE SKIP LOCKED` (`documents/queue.py`), so concurrent
    workers never grab the same job. Stale `running` jobs (lock older than
@@ -84,8 +87,9 @@ There are four runtime pieces:
    `GET /api/documents/{id}/events/`. Each event patches the React Query caches.
    On stream failure the UI falls back to polling `GET /api/documents/{id}/`
    every 1.5 s until the document is terminal.
-6. **Retrieval** — content is served as `json` / `markdown` / `text` (optionally
-   per page). Search uses Postgres full-text search (`websearch`) with
+6. **Retrieval** — content is served as `json` / `markdown` / `text` / `html` /
+   `csv` (optionally per page, or as a `download=1` attachment). Search uses
+   Postgres full-text search (`websearch`) with
    `⟦ ⟧`-wrapped headline matches that the frontend renders as `<mark>` — it
    never injects HTML.
 
@@ -109,7 +113,9 @@ envelope: `{"error": {"code", "message"}}`.
 | **Vite 5** | Fast dev server, proxy of `/api` to the backend in dev, and the production build tool |
 | **React Router 6** | Library (`/`) and document detail (`/documents/:id`) views |
 | **TanStack React Query 5** | Cache-first data fetching; the SSE hook *patches* query caches on each event so the UI updates live without refetches |
-| **Vitest + React Testing Library** | Unit/component tests in `jsdom` (17 tests) |
+| **Upload queue** | Up to 3 concurrent `XMLHttpRequest` uploads with per-file **byte progress**; an accepted file's row then shows the document's live **processing progress** |
+| **Content viewer** | Tabs for **Preview / HTML / Markdown / Plain text / CSV / JSON**, each with copy and `download=1` export; HTML is previewed in a sandboxed iframe. Short documents render all blocks, long ones page in via "Show more" |
+| **Vitest + React Testing Library** | Unit/component tests in `jsdom` (24 tests) |
 
 ### 3.2 Backend
 
@@ -120,6 +126,8 @@ envelope: `{"error": {"code", "message"}}`.
 | **uvicorn (ASGI)** | One server serves both the sync DRF views and the *async* SSE view (Django's async ORM support) |
 | **Postgres 16** | `SELECT … FOR UPDATE SKIP LOCKED` for a safe multi-worker queue, and full-text search (`SearchVector` / `SearchHeadline`) with a GIN index |
 | **psycopg 3** | Async-capable Postgres driver for the async SSE view |
+| **pypdf / pypdfium2 / python-docx** | PDF text layer, PDF→image rendering for OCR, and DOCX body parsing |
+| **Tesseract via pytesseract** | Real local OCR (bundled in the Docker image); selected by `OCR_ENGINE`, swappable for a cloud engine behind `OcrClient` |
 
 ### 3.3 Extraction pipeline
 
@@ -137,16 +145,24 @@ The pipeline is a deliberately decoupled, protocol-driven layer
 - **`extractors/`** — `PdfExtractor` (pypdf for text, pypdfium2 for page
   rendering into OCR input, per-page classifier in `pdf_classifier.py`) and
   `DocxExtractor` (python-docx, walking the body in document order so
-  paragraphs and tables stay interleaved).
-- **`ocr/`** — OCR is behind an `OcrClient` protocol. The built-in
-  `MockOcrClient` returns canned text with a simulated latency; swapping in
-  Tesseract/Textract/Azure requires **zero pipeline changes**.
+  paragraphs and tables stay interleaved). The classifier routes a page to OCR
+  only when it has no text layer, garbled text, or sparse text **over an
+  embedded image** — so short real text pages are trusted.
+- **`ocr/`** — OCR is behind an `OcrClient` protocol. The default
+  `TesseractOcrClient` runs real OCR via `pytesseract` (confidence = mean
+  Tesseract word confidence), selected by `OCR_ENGINE`; `MockOcrClient` returns
+  canned text and is used by the tests. Swapping in Textract/Azure requires
+  **zero pipeline changes**.
 - **`progress.py`** — progress is a protocol (`ProgressReporter`) with fixed
   stage bands (`detecting` 0–0.10, `extracting` 0.10–0.85, `indexing`
   0.85–1.0). Django provides a DB-backed reporter; tests use recording/null
   reporters, keeping the pipeline runnable with no database.
 - **`schema.py`** — frozen dataclasses (`Block`, `ExtractionPlan`,
   `ExtractionResult`) that flow through the pipeline.
+- **`renderers.py`** — pure functions that turn blocks into the output formats
+  the API exposes: `render_markdown`, `render_text`, `render_html` (escaped,
+  grouped lists/tables, page breaks) and `render_csv` (one row per block).
+  HTML/CSV/Markdown all escape or quote user text so nothing is injected.
 
 ### 3.4 Why these choices in combination
 
@@ -188,6 +204,8 @@ networking.
 - Based on `python:3.12-slim`.
 - `PYTHONDONTWRITEBYTECODE` / `PYTHONUNBUFFERED` / `PIP_NO_CACHE_DIR` keep the
   image lean and logs live.
+- Installs the Tesseract OCR binaries (`apt-get install tesseract-ocr
+  tesseract-ocr-eng`) so real OCR works out of the box.
 - Creates a non-root user `app` (uid/gid 1000) and pre-creates
   `/media` + `/app/staticfiles`, owned by it. The container runs as `USER app`
   — the "PermissionError: /media" gotcha in `docs/RUNNING.md` happens when an
@@ -235,6 +253,12 @@ nginx serves three kinds of traffic:
 - `/admin/` and `/static/` — proxied to the backend so the Django admin is
   reachable from the same origin as the SPA.
 
+The upstream is referenced through a variable (`set $backend "http://backend:8000"`)
+with Docker's embedded DNS resolver (`resolver 127.0.0.11 valid=10s`). This
+makes nginx re-resolve the backend's IP, so recreating the backend container
+(which gets a new IP) causes at most a few seconds of 502 and then self-heals —
+without the stale-address 502 you get from a literal `proxy_pass http://backend:8000`.
+
 ### 4.6 Shared volumes
 
 - `pgdata` — Postgres data (survives restarts, gone with `docker compose down -v`).
@@ -250,6 +274,9 @@ nginx serves three kinds of traffic:
   secret is baked into images or committed.
 - `ALLOWED_HOSTS` includes the compose service name `backend` (host header the
   proxy sends) plus localhost entries.
+- Pipeline tuning is env-driven too: `MAX_UPLOAD_BYTES`, `OCR_ENGINE`
+  (`tesseract`/`mock`), `OCR_LANGUAGES`, `OCR_MOCK_LATENCY`,
+  `WORKER_MAX_ATTEMPTS`, `WORKER_STALE_AFTER_SECONDS`, `WORKER_POLL_INTERVAL`.
 
 ### 4.8 Makefile
 
@@ -281,17 +308,17 @@ nginx serves three kinds of traffic:
 
 The suite is split so that most of the logic is testable **without a database**
 and the integration paths are tested against a **real Postgres** (never a
-mocked ORM). Current totals: **90 backend tests** (44 pure-Python + 46
-Django/API) and **17 frontend tests**.
+mocked ORM). Current totals: **109 backend tests** (55 pure-Python + 54
+Django/API) and **24 frontend tests**.
 
 ### 6.1 How to run the tests
 
 ```bash
 # Backend — pure-Python pipeline only (no database needed)
-cd backend && python -m pytest tests/pipeline        # 44 tests
+cd backend && python -m pytest tests/pipeline        # 55 tests
 
 # Backend — full suite (needs Postgres 16 running)
-cd backend && python -m pytest tests                 # 90 tests
+cd backend && python -m pytest tests                 # 109 tests
 
 # If a previous run left a stale test DB behind:
 cd backend && python -m pytest tests --create-db
@@ -317,6 +344,7 @@ programmatically with reportlab/pypdf/python-docx/Pillow:
 | Factory | Produces | Used to test |
 | ------- | -------- | ------------ |
 | `make_digital_pdf` | PDF with a real text layer | the text extraction path |
+| `make_short_text_pdf` | PDF with a single very short text layer | short text is trusted, not OCR'd |
 | `make_scanned_pdf` | Image-only PDF (no text layer) | the OCR path |
 | `make_mixed_pdf` | Digital + scanned pages merged | per-page (mixed) routing |
 | `make_garbled_pdf` | Text layer of control chars | low alphanumeric-ratio classification |
@@ -327,42 +355,48 @@ programmatically with reportlab/pypdf/python-docx/Pillow:
 | `make_binary` | Random bytes | unsupported-type rejection |
 
 Both `tests/pipeline/conftest.py` and `tests/api/conftest.py` expose these as
-pytest fixtures. The API conftest also adds `api_client` (DRF `APIClient`), a
-`_tmp_media` autouse fixture that redirects `MEDIA_ROOT` into `tmp_path` (test
-uploads never touch the repo's `media/`), a `processed_document` fixture that
-uploads + processes synchronously, and the shared `_upload` helper.
+pytest fixtures. The API conftest also adds `api_client` (DRF `APIClient`), and
+a `_tmp_media` autouse fixture that redirects `MEDIA_ROOT` into `tmp_path`
+(test uploads never touch the repo's `media/`) and forces `OCR_ENGINE=mock` /
+zero OCR latency so the API tests are deterministic, plus a
+`processed_document` fixture that uploads + processes synchronously and the
+shared `_upload` helper.
 
 ### 6.3 What each test file covers
 
-**Pure-Python pipeline tests — `backend/tests/pipeline/` (44)**
+**Pure-Python pipeline tests — `backend/tests/pipeline/` (55)**
 
 | File | What it verifies |
 | ---- | ---------------- |
 | `test_probe.py` | Magic-byte sniffing: DOCX renamed `.pdf` is still DOCX (and warns); PDF renamed `.docx` is still PDF; a plain ZIP is not a DOCX; random bytes are unsupported; empty files raise `EmptyDocumentError`; declared extension captured; no-extension files produce no warning |
 | `test_pdf.py` | PDF planning/routing: all-text, all-OCR, and mixed PDFs produce the right per-page strategies; **only scanned pages are sent to OCR** (a `FakeOcrClient` records calls); method is `pdf_text`/`pdf_ocr`/`pdf_mixed`; blocks carry `page` + `metadata.method`, OCR blocks carry confidence; low confidence adds warnings; encrypted/truncated PDFs raise; progress is monotonic and within 0..1; pipeline output merges probe warnings |
 | `test_docx.py` | Document-order interleaving (heading → paragraph → list items → table → paragraph); heading level metadata; table `rows` metadata and tab-joined text; page fields null and method `docx`; embedded-image warning (and its absence); corrupt DOCX raises; plain ZIP is not handled |
-| `test_pdf_classifier.py` | The per-page text/OCR classifier at its thresholds: exactly `min_chars` is text, below is OCR; whitespace-only/empty is OCR; garbled (low alnum ratio) is OCR; clean prose is text; chars/ratio reported |
-| `test_registry_and_renderers.py` | Registry `describe()` contract; unsupported kind raises `UnsupportedFormatError`; `route()` returns extractor + plan; **a toy `TxtExtractor` registered in-test proves a new format needs only one new class**; Markdown renderer (headings, lists, tables, page markers, pipe escaping) and plain-text renderer |
+| `test_pdf_classifier.py` | The per-page text/OCR classifier: long clean text is text; sparse text over an embedded image is OCR; short clean text with no image is text; empty/whitespace is OCR; garbled (low alnum ratio) is OCR; chars/ratio reported |
+| `test_ocr.py` | The Tesseract OCR wrapper with `pytesseract` stubbed: returns text + normalized mean confidence (ignoring `-1` tokens); zero confidences handled; language and `--psm` passed through |
+| `test_registry_and_renderers.py` | Registry `describe()` contract; unsupported kind raises `UnsupportedFormatError`; `route()` returns extractor + plan; **a toy `TxtExtractor` registered in-test proves a new format needs only one new class**; the Markdown renderer (headings, lists, tables, page markers, pipe escaping), plus the HTML renderer (escaped text, grouped lists, tables, page breaks) and CSV renderer (header row, one row per block, OCR confidence) |
 
-**Django/API tests — `backend/tests/api/` (46, Postgres)**
+**Django/API tests — `backend/tests/api/` (54, Postgres)**
 
 | File | What it verifies |
 | ---- | ---------------- |
 | `test_upload.py` | Upload lifecycle: PDF/DOCX → `202 queued`; wrong extension accepted **with warning**; unsupported → `415 unsupported_type`; empty file → `400`; missing `file` field → `400`; oversize → `413 too_large`; duplicate SHA-256 returns the **same id** with `duplicate: true` and creates no second Document/Job; list/retrieve; delete (`204`, then `404`); missing → `404 not_found`; pagination envelope |
-| `test_content.py` | Content endpoint: `format=json` block shape + `metadata.method`; `markdown` page markers; `text`; `page=` filtering; `page=` on a page-less DOCX → `400`; content before done → `409 not_ready`; download returns bytes starting `%PDF-`; search returns headline markers `⟦ ⟧` and the full result shape; search requires `q` ≥ 2 chars; `/api/config/` advertises pdf+docx; the Document serializer's exact contract fields |
+| `test_content.py` | Content endpoint: `format=json` block shape + `metadata.method`; `markdown` page markers; `text`; `html` (content-type + page breaks); `csv` (header row); unknown format → `400`; `download=1` sets `Content-Disposition`; **a short real-text PDF is extracted as `pdf_text`, not OCR (regression)**; `page=` filtering; `page=` on a page-less DOCX → `400`; content before done → `409 not_ready`; download returns bytes starting `%PDF-`; search returns headline markers `⟦ ⟧` and the full result shape; search requires `q` ≥ 2 chars; `/api/config/` advertises pdf+docx; the Document serializer's exact contract fields |
+| `test_ocr_engine.py` | `build_ocr_client()` selects `MockOcrClient` for `OCR_ENGINE=mock`, `TesseractOcrClient` for `tesseract` when the binary is present, and falls back to mock when it is missing |
 | `test_failures.py` | Failure semantics: corrupt and encrypted PDFs fail permanently (`error_code`, `attempts == 1`, no retry); an injected `RuntimeError` is transient — retried up to `WORKER_MAX_ATTEMPTS`, then `internal` with a "Retrying" progress event; raising the cap retries further; a failed document emits a `failed` `ProgressEvent` |
 | `test_queue.py` | Queue correctness: sequential claims return different jobs and then `None`; stale `running` jobs (lock older than `WORKER_STALE_AFTER_SECONDS`) are re-queued; fresh ones are not; **three real threads racing to claim never get the same job** (`SELECT … FOR UPDATE SKIP LOCKED`) — uses `transaction=True` with a `threading.Barrier` |
 | `test_sse.py` | SSE endpoint via Django's `AsyncClient`: a terminal document emits `event: done` and closes; a queued document streamed while a **background thread** processes it ends with `done`; a failed document emits `event: failed`; an unknown id emits `failed`; headers include `Cache-Control: no-cache` and `X-Accel-Buffering: no` |
 | `test_admin.py` | Django admin login page loads and `/static/admin/css/base.css` is served (admin stays styled under uvicorn) |
 | `test_agent_tools.py` | Agent tools: schema listing order; `search_documents`, `list_documents`, `get_document` (json + markdown), `get_document_page`; structured `{"error": ...}` for unknown tool / bad query / wrong argument types instead of raising; missing `name` → `400` |
 
-**Frontend tests — `frontend/src/**/*.test.ts(x)` (17)**
+**Frontend tests — `frontend/src/**/*.test.ts(x)` (24)**
 
 | File | What it verifies |
 | ---- | ---------------- |
 | `components/StatusBadge.test.tsx` | Badge renders each status with the right class; `ProgressBar` shows percent, sets `aria-valuenow`/`aria-label`, and clamps to 0..100 |
 | `components/UploadDropzone.test.tsx` | Accepts supported files; rejects unsupported extensions and oversize files (with messages); the dropzone is focusable |
+| `components/ContentViewer.test.tsx` | Renders blocks in the preview tab; exposes every export format as a tab (Preview/HTML/Markdown/Plain text/CSV/JSON); lazily fetches a text format and displays it; download links request `download=1` |
 | `hooks/useDocumentEvents.test.tsx` | With a fake `EventSource`: opens the stream; on error **falls back to polling**, patches the React Query cache, and stops polling once terminal; a `done` event closes the stream and updates the cache |
+| `hooks/useUploadQueue.test.tsx` | Upload queue tracks per-file **byte progress** via the `uploadDocument` callback, then transitions to `accepted`/`duplicate`/`rejected` |
 | `lib/highlight.test.ts` | `splitHeadline` parses `⟦ ⟧` markers into match/non-match segments, handles multiple and unbalanced markers, and keeps `<script>` text inert (no HTML injection) |
 
 ### 6.4 Testing techniques worth noting
@@ -394,8 +428,9 @@ uploads + processes synchronously, and the shared `_upload` helper.
   object storage (S3) is a storage-backend change only.
 - **DB-backed job queue** — fine at this scale; a dedicated queue is the next
   step.
-- **Mock OCR** — real engines plug in behind the `OcrClient` interface with no
-  pipeline changes.
+- **OCR engine** — real OCR runs through Tesseract (bundled in the image);
+  other engines plug in behind the `OcrClient` interface with no pipeline
+  changes. Accuracy/speed is bounded by the Tesseract model and the render DPI.
 - **SSE fan-out** — progress is read per client from Postgres rather than
   pushed through a broker; fine for small concurrency, the trade-off is one
   poll per client per 0.5 s.

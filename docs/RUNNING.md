@@ -13,9 +13,11 @@ suite. Commands assume you are in the repository root unless stated otherwise.
 | Node.js | 18+ |
 | Docker + Docker Compose | for the all-in-one stack |
 | Postgres | 16 (only for local non-Docker backend) |
+| Tesseract OCR | real OCR (only for local non-Docker backend; bundled in the Docker image) |
 
-No external services, paid APIs, or network calls are used anywhere. OCR is
-mocked behind an interface.
+At runtime no external services, paid APIs, or network calls are used. Real OCR
+runs locally through Tesseract (installed in the Docker image); set
+`OCR_ENGINE=mock` to use the canned mock instead.
 
 ---
 
@@ -66,7 +68,17 @@ make clean              # or: docker compose down -v
    CREATE DATABASE documents OWNER documents;
    ```
 
-2. Set up the Python environment and install dependencies:
+2. Install Tesseract for real OCR (skip if you only need text-layer PDFs or
+   will use `OCR_ENGINE=mock`):
+
+   ```bash
+   # macOS
+   brew install tesseract
+   # Debian/Ubuntu
+   sudo apt-get install -y tesseract-ocr
+   ```
+
+3. Set up the Python environment and install dependencies:
 
    ```bash
    cd backend
@@ -75,7 +87,8 @@ make clean              # or: docker compose down -v
    pip install -r requirements.txt
    ```
 
-3. Configure env (optional — defaults work for a local Postgres):
+4. Configure env (optional — defaults work for a local Postgres). `OCR_ENGINE`
+   defaults to `tesseract`; set it to `mock` to avoid needing the binary:
 
    ```bash
    export POSTGRES_DB=documents
@@ -83,16 +96,17 @@ make clean              # or: docker compose down -v
    export POSTGRES_PASSWORD=documents
    export POSTGRES_HOST=localhost
    export POSTGRES_PORT=5432
+   export OCR_ENGINE=tesseract   # or: mock
    ```
 
-4. Create the schema. **Do not hand-edit migration files** — generate them:
+5. Create the schema. **Do not hand-edit migration files** — generate them:
 
    ```bash
    python manage.py makemigrations documents
    python manage.py migrate
    ```
 
-5. Run the two processes (two terminals):
+6. Run the two processes (two terminals):
 
    ```bash
    # Terminal 1 — the job worker
@@ -126,7 +140,9 @@ cd backend
 python -m pytest tests/pipeline
 ```
 
-This is pure Python and never touches a database. Expect **44 passed**.
+This is pure Python and never touches a database. Expect **55 passed**. The
+Tesseract wrapper test (`tests/pipeline/test_ocr.py`) stubs `pytesseract`, so
+Tesseract is not required to run this subset.
 
 ### 4.2 Backend — full suite (needs Postgres)
 
@@ -140,7 +156,8 @@ source .venv/bin/activate     # if not already
 python -m pytest tests
 ```
 
-Expect **88 passed**.
+Expect **109 passed**. The API tests force `OCR_ENGINE=mock`, so they are
+deterministic and do not require a Tesseract install.
 
 Notes:
 - If you see `database "test_documents" already exists` from a previously
@@ -156,7 +173,7 @@ Notes:
 ```bash
 cd frontend
 npm run typecheck    # TypeScript strict
-npm test             # Vitest + React Testing Library (17 tests)
+npm test             # Vitest + React Testing Library (24 tests)
 npm run build        # production build
 ```
 
@@ -214,13 +231,32 @@ curl -s http://localhost:8000/api/documents/
 The document should now be `status: "done"`, `stage: "done"`,
 `method: "pdf_text"`, `progress: 1.0`.
 
-**4. Read the extracted content:**
+**4. Read the extracted content (five formats):**
 
 ```bash
 curl -s "http://localhost:8000/api/documents/<ID>/content/?format=json"
 curl -s "http://localhost:8000/api/documents/<ID>/content/?format=markdown"
 curl -s "http://localhost:8000/api/documents/<ID>/content/?format=text&page=1"
+curl -s "http://localhost:8000/api/documents/<ID>/content/?format=html"
+curl -s "http://localhost:8000/api/documents/<ID>/content/?format=csv"
+# download as an attachment (sets Content-Disposition: attachment)
+curl -sOJ "http://localhost:8000/api/documents/<ID>/content/?format=markdown&download=1"
 ```
+
+To exercise OCR, build a scanned or short-text PDF instead:
+
+```bash
+python -c "
+from tests.factories import make_scanned_pdf, make_short_text_pdf
+from pathlib import Path
+print(make_short_text_pdf('Hello world', tmp_path=Path('/tmp')))   # text layer
+print(make_scanned_pdf(pages=1, tmp_path=Path('/tmp')))            # image → OCR
+"
+```
+
+A digital page reports `method: pdf_text`; a page with an embedded image and no
+text layer reports `method: pdf_ocr` (or `pdf_mixed`). OCR confidence is stored
+in each OCR block's `metadata.confidence`.
 
 **5. Download the original:**
 
@@ -245,8 +281,9 @@ curl -s -X POST http://localhost:8000/api/agent/tools/call/ \
 ```
 
 **8. In the browser** — upload a PDF or DOCX via the dropzone and watch the
-live progress bar; once done, open the document to see Rendered / Markdown /
-JSON tabs and, for PDFs, the per-page Text/OCR sidebar.
+live progress bar; once done, open the document to see the **Preview / HTML /
+Markdown / Plain text / CSV / JSON** tabs (each with copy and download), the
+document details panel, and, for PDFs, the per-page Text/OCR sidebar.
 
 ---
 

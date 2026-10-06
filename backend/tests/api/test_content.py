@@ -53,6 +53,18 @@ def test_content_text(api_client, digital_pdf):
 
 
 @pytest.mark.django_db
+def test_short_text_pdf_is_extracted_as_text_not_ocr(api_client, tmp_path):
+    """Regression: a short but real text layer must not be routed to OCR."""
+    from tests.factories import make_short_text_pdf
+
+    path = make_short_text_pdf("Hello world", tmp_path=tmp_path)
+    doc = _process(api_client, path, "short.pdf")
+    assert doc.method == "pdf_text"
+    resp = api_client.get(f"/api/documents/{doc.id}/content/?format=text")
+    assert "Hello world" in resp.content.decode()
+
+
+@pytest.mark.django_db
 def test_content_page_filter(api_client, digital_pdf):
     doc = _process(api_client, digital_pdf, "doc.pdf")
     resp = api_client.get(f"/api/documents/{doc.id}/content/?format=json&page=2")
@@ -76,6 +88,43 @@ def test_content_not_ready_409(api_client, digital_pdf):
     body = api_client.get(f"/api/documents/{doc_id}/content/?format=json")
     assert body.status_code == 409
     assert body.data["error"]["code"] == "not_ready"
+
+
+@pytest.mark.django_db
+def test_content_html(api_client, digital_pdf):
+    doc = _process(api_client, digital_pdf, "doc.pdf")
+    resp = api_client.get(f"/api/documents/{doc.id}/content/?format=html")
+    assert resp.status_code == 200
+    assert resp["Content-Type"].startswith("text/html")
+    body = resp.content.decode()
+    assert "<p>" in body
+    assert 'data-page="1"' in body
+
+
+@pytest.mark.django_db
+def test_content_csv(api_client, digital_pdf):
+    doc = _process(api_client, digital_pdf, "doc.pdf")
+    resp = api_client.get(f"/api/documents/{doc.id}/content/?format=csv")
+    assert resp.status_code == 200
+    assert resp["Content-Type"].startswith("text/csv")
+    first_line = resp.content.decode().splitlines()[0]
+    assert first_line == "idx,type,page,method,confidence,text"
+
+
+@pytest.mark.django_db
+def test_content_unknown_format_400(api_client, digital_pdf):
+    doc = _process(api_client, digital_pdf, "doc.pdf")
+    resp = api_client.get(f"/api/documents/{doc.id}/content/?format=xml")
+    assert resp.status_code == 400
+    assert resp.data["error"]["code"] == "bad_request"
+
+
+@pytest.mark.django_db
+def test_content_download_sets_attachment_header(api_client, digital_pdf):
+    doc = _process(api_client, digital_pdf, "doc.pdf")
+    resp = api_client.get(f"/api/documents/{doc.id}/content/?format=markdown&download=1")
+    assert resp.status_code == 200
+    assert resp["Content-Disposition"] == 'attachment; filename="doc.md"'
 
 
 @pytest.mark.django_db

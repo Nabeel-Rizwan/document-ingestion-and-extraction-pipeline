@@ -12,11 +12,13 @@ registered, nothing else changes. Upload validation and the frontend's
 accepted-file list both derive from the extractor registry via
 `GET /api/config/`.
 
-> The original assessment brief shipped in this repository as `Readme.md` is
-> preserved in git history (`git show HEAD:Readme.md`).
+> The original assessment brief (later replaced by this document) is preserved
+> in git history: `git show 857512e:Readme.md`.
 
 > A step-by-step run & test guide (Docker, local dev, test commands, and a
 > manual end-to-end walkthrough) lives in [`docs/RUNNING.md`](docs/RUNNING.md).
+> A deeper walkthrough of the components, tech choices and Docker setup lives
+> in [`architecture.md`](architecture.md).
 
 ## Quick start (Docker)
 
@@ -87,7 +89,9 @@ Django ASGI (uvicorn) ───────► Postgres ◄───────
 ### Request lifecycle
 
 1. **Upload** — The browser streams the file to `POST /api/documents/` (one
-   POST per file, at most three concurrent). The view writes it to a temporary
+   POST per file, at most three concurrent) via XHR so the upload panel shows a
+   live per-file **byte-progress bar**; once accepted the same row switches to
+   the document's **processing progress** (SSE). The view writes it to a temporary
    file while hashing (SHA-256) and enforcing `MAX_UPLOAD_BYTES` (413
    `too_large`). The file is sniffed with `pipeline/probe.py` — never trusting
    the extension — and rejected with 415 `unsupported_type` if no extractor
@@ -112,7 +116,8 @@ Django ASGI (uvicorn) ───────► Postgres ◄───────
    the stream fails the UI falls back to polling the document every 1.5 s until
    it is terminal.
 6. **Retrieval** — `GET /api/documents/{id}/content/` serves blocks as
-   `json`, `markdown`, or `text` (optionally per page). Search uses Postgres
+   `json`, `markdown`, `text`, `html`, or `csv` (optionally per page, or as a
+   `download=1` attachment). Search uses Postgres
    full-text search with `websearch` syntax and headline snippets whose matches
    are wrapped in `⟦`/`⟧` sentinels — the frontend renders `<mark>` from those,
    never HTML.
@@ -126,15 +131,24 @@ Routing is two-layer (`pipeline/router.py`):
    opens the file, decrypts if possible (else `EncryptedDocumentError`), and
    classifies **each page** as `text` or `ocr` via `pipeline/extractors/pdf_classifier.py`.
 
-A page is classified as `ocr` (scanned) when its extracted text is too sparse
-or too garbled to trust:
+A page is classified as `ocr` (scanned) when it has no text layer, its text is
+too garbled, or it has only a *sparse* text layer **and** an embedded image
+(short text over an image ⇒ scanned). A short-but-clean text page with no image
+is treated as digital text — so terse pages like a title (`Hello world`) are not
+needlessly OCR'd:
 
 | Threshold        | Default | Meaning                                          |
 | ---------------- | ------- | ------------------------------------------------ |
-| `min_chars`      | `25`    | fewer stripped characters than this → `ocr`      |
+| `min_chars`      | `8`     | below this (with an embedded image) → `ocr`      |
 | `min_alnum_ratio`| `0.50`  | alphanumeric+whitespace ratio below this → `ocr` (mangled font encodings) |
 | `ocr_min_confidence` | `0.60` | OCR results below this add a warning per page |
-| `render_scale`   | `2.0`   | pypdfium2 render scale for OCR input images      |
+| `render_scale`   | `3.0`   | pypdfium2 render scale for OCR input images (~216 DPI) |
+
+OCR uses **Tesseract** locally (via `pytesseract`), selected by `OCR_ENGINE`
+(`tesseract` by default, or `mock` for tests). If the `tesseract` binary is
+missing the backend logs a warning and falls back to the mock client. Swapping
+in a cloud engine (Textract/Azure Document Intelligence) means one new
+`OcrClient` implementation — no pipeline changes.
 
 The detecting stage therefore reports e.g. *"PDF: 9 text pages, 3 scanned
 pages → OCR"* and the UI shows it. The overall method is `pdf_text`,
@@ -154,7 +168,7 @@ All endpoints are under `/api/`. Errors always use
 | `documents/` | GET | Paginated list: `{count, next, previous, results: Document[]}` |
 | `documents/{id}/` | GET | Single document |
 | `documents/{id}/` | DELETE | Delete document and stored file (204) |
-| `documents/{id}/content/?format=json\|markdown\|text&page=N` | GET | Content. `409 not_ready` unless `status=done`; `400` if `page` given on a page-less document |
+| `documents/{id}/content/?format=json\|markdown\|text\|html\|csv&page=N&download=1` | GET | Content (json/markdown/text/html/csv). `409 not_ready` unless `status=done`; `400` if `page` given on a page-less document; `download=1` sets `Content-Disposition: attachment` |
 | `documents/{id}/download/` | GET | Original file download |
 | `documents/{id}/events/` | GET | SSE stream: `event: progress\|done\|failed`, `data: {status, stage, progress, message}` |
 | `search/?q=&limit=` | GET | Full-text search. Headlines wrap matches in `⟦ ⟧` |
@@ -306,9 +320,10 @@ database errors after an interrupted run.
   moving to S3 means changing the storage backend only.
 - **DB-backed job queue** — fine at this scale; a dedicated queue would be the
   next step (see `docs/ANSWERS.md`).
-- **Mock OCR** — OCR is behind an `OcrClient` interface returning canned text
-  (`pipeline/ocr/mock.py`); a production client would wrap Tesseract/Textract/
-  Azure Document Intelligence with no pipeline changes.
+- **Local OCR** — real OCR runs through Tesseract (`pipeline/ocr/tesseract.py`)
+  behind the `OcrClient` interface; `OCR_ENGINE=mock` (used by the test suite)
+  returns canned text. A cloud engine would be one new `OcrClient`, with no
+  pipeline changes.
 - **No virus scanning** of uploads.
 - **SSE fan-out** — progress events are read per-client from Postgres rather
   than pushed via a broker.

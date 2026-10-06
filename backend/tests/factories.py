@@ -24,6 +24,17 @@ def make_digital_pdf(pages: int = 3, tmp_path: Path | None = None) -> Path:
     return path
 
 
+def make_short_text_pdf(text: str = "Hello world", tmp_path: Path | None = None) -> Path:
+    """A PDF whose single page has a real but very short text layer."""
+    path = tmp_path / "short.pdf" if tmp_path else Path("/tmp/short.pdf")
+    c = rl_canvas.Canvas(str(path), pagesize=A4)
+    c.setFont("Helvetica", 12)
+    c.drawString(72, 720, text)
+    c.showPage()
+    c.save()
+    return path
+
+
 def make_scanned_pdf(pages: int = 2, tmp_path: Path | None = None) -> Path:
     """A PDF whose pages are raster images with no text layer (needs OCR)."""
     path = tmp_path / f"scanned_{pages}p.pdf" if tmp_path else Path(f"/tmp/scanned_{pages}p.pdf")

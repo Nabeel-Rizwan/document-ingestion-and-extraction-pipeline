@@ -11,12 +11,30 @@ def test_exactly_min_chars_is_text():
     assert classify_page(text, config).strategy == "text"
 
 
-def test_below_min_chars_is_ocr():
+def test_sparse_text_over_image_is_ocr():
+    """A short text layer over an embedded image is a scanned page."""
     config = PdfConfig(min_chars=25)
-    text = "a" * 24
-    result = classify_page(text, config)
+    result = classify_page("a" * 24, config, has_images=True)
     assert result.strategy == "ocr"
-    assert "too few characters" in result.reason
+    assert "sparse text" in result.reason
+
+
+def test_short_clean_text_without_image_is_text():
+    """A terse digital page (eg a title) must not be sent to OCR."""
+    result = classify_page("Hello world", PdfConfig())
+    assert result.strategy == "text"
+    assert result.chars == 11
+
+
+def test_short_page_with_image_is_ocr():
+    result = classify_page("Hello", PdfConfig(), has_images=True)
+    assert result.strategy == "ocr"
+
+
+def test_no_text_layer_is_ocr():
+    result = classify_page("   \n  ", PdfConfig())
+    assert result.strategy == "ocr"
+    assert result.reason == "no text layer"
 
 
 def test_whitespace_only_is_ocr():

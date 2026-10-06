@@ -6,9 +6,11 @@ from django.contrib.postgres.search import SearchHeadline, SearchQuery, SearchRa
 from django.core.exceptions import ValidationError
 from django.db.models import Q
 
-from pipeline.renderers import render_markdown, render_text
+from pipeline.renderers import render_csv, render_html, render_markdown, render_text
 
 from .models import Block, Document
+
+CONTENT_FORMATS = ("json", "markdown", "text", "html", "csv")
 
 SEARCH_START_SEL = "\u27e6"  # ⟦
 SEARCH_STOP_SEL = "\u27e7"  # ⟧
@@ -29,12 +31,16 @@ def get_document(document_id: str) -> Document | None:
 
 
 def get_content(document: Document, fmt: str, page: int | None = None) -> str:
-    """Render a document's blocks as markdown or plain text (json handled by API)."""
+    """Render a document's blocks in a text format (json is handled by the API)."""
     blocks = list(document.blocks.all())
     if page is not None:
         blocks = [b for b in blocks if b.page == page]
     if fmt == "markdown":
         return render_markdown(blocks)
+    if fmt == "html":
+        return render_html(blocks)
+    if fmt == "csv":
+        return render_csv(blocks)
     return render_text(blocks)
 
 

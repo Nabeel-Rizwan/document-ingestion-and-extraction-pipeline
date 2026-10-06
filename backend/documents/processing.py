@@ -27,8 +27,29 @@ logger = logging.getLogger(__name__)
 
 
 def build_ocr_client():
-    """OCR client factory. Swapping in a real engine requires only this change."""
-    return MockOcrClient(latency_s=settings.OCR_MOCK_LATENCY)
+    """OCR client factory. Swapping in a real engine requires only this change.
+
+    ``OCR_ENGINE`` selects the backend (``tesseract`` by default, or ``mock``).
+    If Tesseract is selected but the binary is unavailable, we fall back to the
+    mock client so local development still works, with a loud warning.
+    """
+    engine = getattr(settings, "OCR_ENGINE", "tesseract")
+    if engine == "mock":
+        return MockOcrClient(latency_s=settings.OCR_MOCK_LATENCY)
+
+    import shutil
+
+    if shutil.which("tesseract") is None:
+        logger.warning(
+            "OCR_ENGINE=%r but the 'tesseract' binary was not found on PATH; "
+            "falling back to mock OCR. Install tesseract for real OCR.",
+            engine,
+        )
+        return MockOcrClient(latency_s=settings.OCR_MOCK_LATENCY)
+
+    from pipeline.ocr.tesseract import TesseractOcrClient
+
+    return TesseractOcrClient(languages=getattr(settings, "OCR_LANGUAGES", "eng"))
 
 
 def _mark_failed(doc: Document, *, code: str, error: str, progress: float = 1.0) -> None:

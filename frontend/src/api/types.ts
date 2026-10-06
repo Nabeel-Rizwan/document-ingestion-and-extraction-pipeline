@@ -5,6 +5,7 @@ export type Stage = "queued" | "detecting" | "extracting" | "indexing" | "done" 
 export type Method = "" | "pdf_text" | "pdf_ocr" | "pdf_mixed" | "docx";
 export type ErrorCode = "" | "corrupt" | "encrypted" | "unsupported" | "empty" | "internal";
 export type BlockType = "heading" | "paragraph" | "list_item" | "table";
+export type ContentFormat = "json" | "markdown" | "text" | "html" | "csv";
 
 export interface Document {
   id: string;

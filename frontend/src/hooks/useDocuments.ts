@@ -29,7 +29,7 @@ export function useDocument(id: string) {
 export function useUpload() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: uploadDocument,
+    mutationFn: (file: File) => uploadDocument(file),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: documentsKey });
       queryClient.setQueryData(documentKey(result.document.id), result.document);

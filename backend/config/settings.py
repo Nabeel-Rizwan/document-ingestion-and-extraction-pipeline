@@ -91,6 +91,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # --- pipeline-specific settings -------------------------------------------
 
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", 25 * 1024 * 1024))
+# OCR engine: "tesseract" (real) or "mock". Tesseract needs the binary on PATH.
+OCR_ENGINE = os.environ.get("OCR_ENGINE", "tesseract")
+OCR_LANGUAGES = os.environ.get("OCR_LANGUAGES", "eng")
 OCR_MOCK_LATENCY = float(os.environ.get("OCR_MOCK_LATENCY", "0.2"))
 WORKER_MAX_ATTEMPTS = int(os.environ.get("WORKER_MAX_ATTEMPTS", "3"))
 WORKER_STALE_AFTER_SECONDS = int(os.environ.get("WORKER_STALE_AFTER_SECONDS", "300"))

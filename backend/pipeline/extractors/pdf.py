@@ -34,6 +34,26 @@ def _open_reader(probe):
     return reader
 
 
+def _page_has_images(page) -> bool:
+    """Cheaply detect an embedded image XObject without decoding it."""
+    try:
+        resources = page.get("/Resources")
+        if resources is None:
+            return False
+        xobjects = resources.get_object().get("/XObject")
+        if xobjects is None:
+            return False
+        for obj in xobjects.get_object().values():
+            try:
+                if obj.get_object().get("/Subtype") == "/Image":
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        return False
+    return False
+
+
 class PdfExtractor:
     """Extracts blocks from digital or scanned PDF files."""
 
@@ -47,6 +67,11 @@ class PdfExtractor:
 
         self.ocr = ocr or MockOcrClient()
         self.config = config or PdfConfig()
+        # Per-document cache of the text layer, populated during plan() and
+        # reused during extract() so pages are not text-extracted twice.
+        # The extractor is created fresh per job, so this never leaks across
+        # documents; the key includes size+mtime to be safe.
+        self._text_cache: tuple[tuple[str, int, int], list[str]] | None = None
 
     def can_handle(self, probe) -> bool:
         return probe.kind == "pdf"
@@ -56,19 +81,35 @@ class PdfExtractor:
 
     # --- planning ---------------------------------------------------------
 
+    def _cache_key(self, probe) -> tuple[str, int, int]:
+        stat = probe.path.stat()
+        return (str(probe.path), stat.st_size, stat.st_mtime_ns)
+
+    def _page_texts(self, probe, reader) -> list[str]:
+        """Extract each page's text layer once, memoised for extract()."""
+        key = self._cache_key(probe)
+        if self._text_cache is not None and self._text_cache[0] == key:
+            return self._text_cache[1]
+        texts: list[str] = []
+        for page in reader.pages:
+            try:
+                texts.append(page.extract_text() or "")
+            except Exception:
+                texts.append("")
+        self._text_cache = (key, texts)
+        return texts
+
     def plan(self, probe) -> ExtractionPlan:
         reader = _open_reader(probe)
         page_count = len(reader.pages)
         if page_count == 0:
             raise EmptyDocumentError("The PDF has no pages.")
 
-        strategies: list[str] = []
-        for page in reader.pages:
-            try:
-                text = page.extract_text() or ""
-            except Exception:
-                text = ""
-            strategies.append(classify_page(text, self.config).strategy)
+        texts = self._page_texts(probe, reader)
+        strategies = [
+            classify_page(text, self.config, has_images=_page_has_images(page)).strategy
+            for text, page in zip(texts, reader.pages)
+        ]
 
         text_pages = strategies.count("text")
         ocr_pages = strategies.count("ocr")
@@ -99,12 +140,16 @@ class PdfExtractor:
         page_count = len(reader.pages)
         strategies = plan.strategies
         method = self._method_for(strategies)
+        # Reuse the text layer extracted during plan() instead of extracting
+        # every page a second time.
+        page_texts = self._page_texts(probe, reader)
         blocks: list[Block] = []
         warnings: list[str] = []
         ocr_confidences: list[float] = []
+        pdfium_doc = None
 
         try:
-            for i, page in enumerate(reader.pages):
+            for i in range(page_count):
                 page_no = i + 1
                 strategy = strategies[i] if i < len(strategies) else "ocr"
                 progress.progress(
@@ -113,10 +158,16 @@ class PdfExtractor:
                 )
 
                 if strategy == "text":
-                    text = (page.extract_text() or "").strip()
+                    text = (page_texts[i] if i < len(page_texts) else "").strip()
                     blocks.extend(self._paragraph_blocks(text, page_no, method="text"))
                 else:
-                    image = self._render_page(probe.path, i, page_no)
+                    if pdfium_doc is None:
+                        import pypdfium2 as pdfium
+
+                        # Open the renderer once for the whole document rather
+                        # than re-parsing it for every scanned page.
+                        pdfium_doc = pdfium.PdfDocument(str(probe.path))
+                    image = self._render_page(pdfium_doc, i)
                     try:
                         ocr_result = self.ocr.recognize(image, page=page_no)
                     finally:
@@ -139,6 +190,9 @@ class PdfExtractor:
                     )
         except pypdf.errors.PdfReadError as exc:
             raise CorruptDocumentError(f"Could not read PDF: {exc}") from exc
+        finally:
+            if pdfium_doc is not None:
+                pdfium_doc.close()
 
         return ExtractionResult(
             blocks=blocks,
@@ -150,22 +204,17 @@ class PdfExtractor:
 
     # --- helpers ----------------------------------------------------------
 
-    def _render_page(self, path, index: int, page_no: int) -> Image.Image:
-        import pypdfium2 as pdfium
-
-        doc = pdfium.PdfDocument(path)
+    def _render_page(self, doc, index: int) -> Image.Image:
+        """Render page ``index`` from an already-open pdfium document."""
+        page = doc[index]
         try:
-            page = doc[index]
+            bitmap = page.render(scale=self.config.render_scale)
             try:
-                bitmap = page.render(scale=self.config.render_scale)
-                try:
-                    return bitmap.to_pil()
-                finally:
-                    bitmap.close()
+                return bitmap.to_pil()
             finally:
-                page.close()
+                bitmap.close()
         finally:
-            doc.close()
+            page.close()
 
     def _paragraph_blocks(
         self,

@@ -22,8 +22,11 @@ from tests.factories import (
 
 @pytest.fixture(autouse=True)
 def _tmp_media(settings, tmp_path):
-    """Keep test uploads out of the repo's media folder."""
+    """Keep test uploads out of the repo's media folder and force mock OCR so
+    the API tests are deterministic and do not depend on a Tesseract install."""
     settings.MEDIA_ROOT = str(tmp_path / "media")
+    settings.OCR_ENGINE = "mock"
+    settings.OCR_MOCK_LATENCY = 0.0
 
 
 def _upload(client, path, filename):
