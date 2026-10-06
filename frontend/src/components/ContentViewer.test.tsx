@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ContentViewer } from "./ContentViewer";
 import type { ContentResponse, Document } from "../api/types";
@@ -64,6 +64,28 @@ describe("ContentViewer", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Plain text" }));
     await waitFor(() => expect(getContent).toHaveBeenCalledWith("d1", "text", undefined));
     expect(await screen.findByTestId("content-text")).toHaveTextContent("Hello world");
+  });
+
+  it("groups consecutive list items into a single list", () => {
+    const listContent: ContentResponse = {
+      document_id: "d1",
+      page_count: 2,
+      blocks: [
+        { id: 1, idx: 0, type: "heading", text: "Title", page: 1, metadata: { level: 1 } },
+        { id: 2, idx: 1, type: "list_item", text: "One", page: 1, metadata: {} },
+        { id: 3, idx: 2, type: "list_item", text: "Two", page: 1, metadata: {} },
+      ],
+    };
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ContentViewer document={doc} selectedPage={null} content={listContent} />
+      </QueryClientProvider>,
+    );
+    const list = screen.getByRole("list");
+    expect(list.tagName).toBe("UL");
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: "Title" })).toBeInTheDocument();
   });
 
   it("exposes the supported export formats as tabs", () => {

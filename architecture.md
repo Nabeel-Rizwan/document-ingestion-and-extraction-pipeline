@@ -115,7 +115,7 @@ envelope: `{"error": {"code", "message"}}`.
 | **TanStack React Query 5** | Cache-first data fetching; the SSE hook *patches* query caches on each event so the UI updates live without refetches |
 | **Upload queue** | Up to 3 concurrent `XMLHttpRequest` uploads with per-file **byte progress**; an accepted file's row then shows the document's live **processing progress** |
 | **Content viewer** | Tabs for **Preview / HTML / Markdown / Plain text / CSV / JSON**, each with copy and `download=1` export; HTML is previewed in a sandboxed iframe. Short documents render all blocks, long ones page in via "Show more" |
-| **Vitest + React Testing Library** | Unit/component tests in `jsdom` (24 tests) |
+| **Vitest + React Testing Library** | Unit/component tests in `jsdom` (25 tests) |
 
 ### 3.2 Backend
 
@@ -148,6 +148,13 @@ The pipeline is a deliberately decoupled, protocol-driven layer
   paragraphs and tables stay interleaved). The classifier routes a page to OCR
   only when it has no text layer, garbled text, or sparse text **over an
   embedded image** — so short real text pages are trusted.
+  - **PDF structure typing** — for digital pages, the extractor reads the
+    PDF's own layout (per-fragment font size, weight and position via a pypdf
+    text visitor) and emits typed blocks: **headings** (larger-than-body, with
+    levels; or short bold lines), **list items** (bullet / `1.` markers, marker
+    stripped) and **paragraphs** (consecutive lines reflowed, broken on an
+    unusually large vertical gap). DOCX gets the same types from paragraph
+    styles. All formats then render the types distinctly.
 - **`ocr/`** — OCR is behind an `OcrClient` protocol. The default
   `TesseractOcrClient` runs real OCR via `pytesseract` (confidence = mean
   Tesseract word confidence), selected by `OCR_ENGINE`; `MockOcrClient` returns
@@ -308,17 +315,17 @@ without the stale-address 502 you get from a literal `proxy_pass http://backend:
 
 The suite is split so that most of the logic is testable **without a database**
 and the integration paths are tested against a **real Postgres** (never a
-mocked ORM). Current totals: **109 backend tests** (55 pure-Python + 54
-Django/API) and **24 frontend tests**.
+mocked ORM). Current totals: **114 backend tests** (59 pure-Python + 55
+Django/API) and **25 frontend tests**.
 
 ### 6.1 How to run the tests
 
 ```bash
 # Backend — pure-Python pipeline only (no database needed)
-cd backend && python -m pytest tests/pipeline        # 55 tests
+cd backend && python -m pytest tests/pipeline        # 59 tests
 
 # Backend — full suite (needs Postgres 16 running)
-cd backend && python -m pytest tests                 # 109 tests
+cd backend && python -m pytest tests                 # 114 tests
 
 # If a previous run left a stale test DB behind:
 cd backend && python -m pytest tests --create-db
@@ -344,6 +351,7 @@ programmatically with reportlab/pypdf/python-docx/Pillow:
 | Factory | Produces | Used to test |
 | ------- | -------- | ------------ |
 | `make_digital_pdf` | PDF with a real text layer | the text extraction path |
+| `make_structured_pdf` | PDF with title + section heading + paragraphs + bullets/numbers | heading/list/paragraph typing |
 | `make_short_text_pdf` | PDF with a single very short text layer | short text is trusted, not OCR'd |
 | `make_scanned_pdf` | Image-only PDF (no text layer) | the OCR path |
 | `make_mixed_pdf` | Digital + scanned pages merged | per-page (mixed) routing |
@@ -364,18 +372,18 @@ shared `_upload` helper.
 
 ### 6.3 What each test file covers
 
-**Pure-Python pipeline tests — `backend/tests/pipeline/` (55)**
+**Pure-Python pipeline tests — `backend/tests/pipeline/` (59)**
 
 | File | What it verifies |
 | ---- | ---------------- |
 | `test_probe.py` | Magic-byte sniffing: DOCX renamed `.pdf` is still DOCX (and warns); PDF renamed `.docx` is still PDF; a plain ZIP is not a DOCX; random bytes are unsupported; empty files raise `EmptyDocumentError`; declared extension captured; no-extension files produce no warning |
-| `test_pdf.py` | PDF planning/routing: all-text, all-OCR, and mixed PDFs produce the right per-page strategies; **only scanned pages are sent to OCR** (a `FakeOcrClient` records calls); method is `pdf_text`/`pdf_ocr`/`pdf_mixed`; blocks carry `page` + `metadata.method`, OCR blocks carry confidence; low confidence adds warnings; encrypted/truncated PDFs raise; progress is monotonic and within 0..1; pipeline output merges probe warnings |
+| `test_pdf.py` | PDF planning/routing: all-text, all-OCR, and mixed PDFs produce the right per-page strategies; **only scanned pages are sent to OCR** (a `FakeOcrClient` records calls); method is `pdf_text`/`pdf_ocr`/`pdf_mixed`; blocks carry `page` + `metadata.method`, OCR blocks carry confidence; low confidence adds warnings; encrypted/truncated PDFs raise; progress is monotonic and within 0..1; pipeline output merges probe warnings; and **structure typing** — font-size headings (levels 1/2), bullet/numbered list items (markers stripped), paragraphs reflowed, while a uniform-text PDF stays all-paragraph |
 | `test_docx.py` | Document-order interleaving (heading → paragraph → list items → table → paragraph); heading level metadata; table `rows` metadata and tab-joined text; page fields null and method `docx`; embedded-image warning (and its absence); corrupt DOCX raises; plain ZIP is not handled |
 | `test_pdf_classifier.py` | The per-page text/OCR classifier: long clean text is text; sparse text over an embedded image is OCR; short clean text with no image is text; empty/whitespace is OCR; garbled (low alnum ratio) is OCR; chars/ratio reported |
 | `test_ocr.py` | The Tesseract OCR wrapper with `pytesseract` stubbed: returns text + normalized mean confidence (ignoring `-1` tokens); zero confidences handled; language and `--psm` passed through |
 | `test_registry_and_renderers.py` | Registry `describe()` contract; unsupported kind raises `UnsupportedFormatError`; `route()` returns extractor + plan; **a toy `TxtExtractor` registered in-test proves a new format needs only one new class**; the Markdown renderer (headings, lists, tables, page markers, pipe escaping), plus the HTML renderer (escaped text, grouped lists, tables, page breaks) and CSV renderer (header row, one row per block, OCR confidence) |
 
-**Django/API tests — `backend/tests/api/` (54, Postgres)**
+**Django/API tests — `backend/tests/api/` (55, Postgres)**
 
 | File | What it verifies |
 | ---- | ---------------- |
@@ -388,13 +396,13 @@ shared `_upload` helper.
 | `test_admin.py` | Django admin login page loads and `/static/admin/css/base.css` is served (admin stays styled under uvicorn) |
 | `test_agent_tools.py` | Agent tools: schema listing order; `search_documents`, `list_documents`, `get_document` (json + markdown), `get_document_page`; structured `{"error": ...}` for unknown tool / bad query / wrong argument types instead of raising; missing `name` → `400` |
 
-**Frontend tests — `frontend/src/**/*.test.ts(x)` (24)**
+**Frontend tests — `frontend/src/**/*.test.ts(x)` (25)**
 
 | File | What it verifies |
 | ---- | ---------------- |
 | `components/StatusBadge.test.tsx` | Badge renders each status with the right class; `ProgressBar` shows percent, sets `aria-valuenow`/`aria-label`, and clamps to 0..100 |
 | `components/UploadDropzone.test.tsx` | Accepts supported files; rejects unsupported extensions and oversize files (with messages); the dropzone is focusable |
-| `components/ContentViewer.test.tsx` | Renders blocks in the preview tab; exposes every export format as a tab (Preview/HTML/Markdown/Plain text/CSV/JSON); lazily fetches a text format and displays it; download links request `download=1` |
+| `components/ContentViewer.test.tsx` | Renders blocks in the preview tab; groups consecutive `list_item` blocks into one `<ul>` and renders headings by level; exposes every export format as a tab (Preview/HTML/Markdown/Plain text/CSV/JSON); lazily fetches a text format and displays it; download links request `download=1` |
 | `hooks/useDocumentEvents.test.tsx` | With a fake `EventSource`: opens the stream; on error **falls back to polling**, patches the React Query cache, and stops polling once terminal; a `done` event closes the stream and updates the cache |
 | `hooks/useUploadQueue.test.tsx` | Upload queue tracks per-file **byte progress** via the `uploadDocument` callback, then transitions to `accepted`/`duplicate`/`rejected` |
 | `lib/highlight.test.ts` | `splitHeadline` parses `⟦ ⟧` markers into match/non-match segments, handles multiple and unbalanced markers, and keeps `<script>` text inert (no HTML injection) |

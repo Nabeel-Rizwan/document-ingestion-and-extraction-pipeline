@@ -140,7 +140,7 @@ cd backend
 python -m pytest tests/pipeline
 ```
 
-This is pure Python and never touches a database. Expect **55 passed**. The
+This is pure Python and never touches a database. Expect **59 passed**. The
 Tesseract wrapper test (`tests/pipeline/test_ocr.py`) stubs `pytesseract`, so
 Tesseract is not required to run this subset.
 
@@ -156,7 +156,7 @@ source .venv/bin/activate     # if not already
 python -m pytest tests
 ```
 
-Expect **109 passed**. The API tests force `OCR_ENGINE=mock`, so they are
+Expect **114 passed**. The API tests force `OCR_ENGINE=mock`, so they are
 deterministic and do not require a Tesseract install.
 
 Notes:
@@ -173,7 +173,7 @@ Notes:
 ```bash
 cd frontend
 npm run typecheck    # TypeScript strict
-npm test             # Vitest + React Testing Library (24 tests)
+npm test             # Vitest + React Testing Library (25 tests)
 npm run build        # production build
 ```
 

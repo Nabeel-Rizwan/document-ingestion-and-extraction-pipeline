@@ -65,6 +65,30 @@ def test_short_text_pdf_is_extracted_as_text_not_ocr(api_client, tmp_path):
 
 
 @pytest.mark.django_db
+def test_structured_pdf_preserves_block_types(api_client, tmp_path):
+    """Title/section/list/paragraph survive into every output format."""
+    from tests.factories import make_structured_pdf
+
+    doc = _process(api_client, make_structured_pdf(tmp_path=tmp_path), "structured.pdf")
+
+    body = api_client.get(f"/api/documents/{doc.id}/content/?format=json").data
+    types = {b["type"] for b in body["blocks"]}
+    assert {"heading", "paragraph", "list_item"} <= types
+
+    md = api_client.get(f"/api/documents/{doc.id}/content/?format=markdown").content.decode()
+    assert "# Quarterly Report" in md
+    assert "## Findings" in md
+    assert "- First bullet point" in md
+
+    html = api_client.get(f"/api/documents/{doc.id}/content/?format=html").content.decode()
+    assert "<h1>Quarterly Report</h1>" in html
+    assert "<li>First bullet point</li>" in html
+
+    csv = api_client.get(f"/api/documents/{doc.id}/content/?format=csv").content.decode()
+    assert "heading" in csv and "list_item" in csv
+
+
+@pytest.mark.django_db
 def test_content_page_filter(api_client, digital_pdf):
     doc = _process(api_client, digital_pdf, "doc.pdf")
     resp = api_client.get(f"/api/documents/{doc.id}/content/?format=json&page=2")

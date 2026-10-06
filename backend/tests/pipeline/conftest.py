@@ -11,6 +11,8 @@ from tests.factories import (
     make_mixed_pdf,
     make_plain_zip,
     make_scanned_pdf,
+    make_short_text_pdf,
+    make_structured_pdf,
     make_truncated_pdf,
 )
 
@@ -46,6 +48,16 @@ def truncated_pdf(tmp_path):
 
 
 @pytest.fixture
+def structured_pdf(tmp_path):
+    return make_structured_pdf(tmp_path=tmp_path)
+
+
+@pytest.fixture
+def short_text_pdf(tmp_path):
+    return make_short_text_pdf(tmp_path=tmp_path)
+
+
+@pytest.fixture
 def garbled_pdf(tmp_path):
     return make_garbled_pdf(tmp_path=tmp_path)
 
@@ -69,5 +81,7 @@ __all__ = [
     "make_mixed_pdf",
     "make_plain_zip",
     "make_scanned_pdf",
+    "make_short_text_pdf",
+    "make_structured_pdf",
     "make_truncated_pdf",
 ]

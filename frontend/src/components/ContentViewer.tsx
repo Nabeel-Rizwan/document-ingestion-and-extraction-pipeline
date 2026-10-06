@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { contentUrl, getContent } from "../api/documents";
 import type { Block, ContentFormat, ContentResponse, Document } from "../api/types";
@@ -6,6 +6,39 @@ import { BlockView } from "./BlockView";
 import { CopyButton } from "./CopyButton";
 import { EmptyState } from "./EmptyState";
 import { Tabs } from "./Tabs";
+
+/**
+ * Render blocks, wrapping consecutive list items in a single `<ul>` so the
+ * list structure is preserved in the DOM (and looks right).
+ */
+function PreviewBlocks({ blocks }: { blocks: Block[] }) {
+  const nodes: ReactNode[] = [];
+  let pending: Block[] = [];
+
+  const flush = () => {
+    if (pending.length === 0) return;
+    nodes.push(
+      <ul className="block-list" key={`list-${pending[0].idx}`}>
+        {pending.map((b) => (
+          <BlockView key={`${b.idx}-${b.id}`} block={b} />
+        ))}
+      </ul>,
+    );
+    pending = [];
+  };
+
+  for (const block of blocks) {
+    if (block.type === "list_item") {
+      pending.push(block);
+      continue;
+    }
+    flush();
+    nodes.push(<BlockView key={`${block.idx}-${block.id}`} block={block} />);
+  }
+  flush();
+
+  return <>{nodes}</>;
+}
 
 const CHUNK_SIZE = 200;
 
@@ -136,9 +169,7 @@ export function ContentViewer({
     return (
       <div className="content-panel">
         <div>
-          {visibleBlocks.map((b: Block) => (
-            <BlockView key={`${b.idx}-${b.id}`} block={b} />
-          ))}
+          <PreviewBlocks blocks={visibleBlocks} />
         </div>
         {document.page_count === null && content.blocks.length > chunk && (
           <button className="btn" onClick={() => setChunk((c) => c + CHUNK_SIZE)}>

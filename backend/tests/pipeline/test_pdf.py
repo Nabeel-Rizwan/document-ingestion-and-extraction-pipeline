@@ -154,3 +154,44 @@ def test_pipeline_output_merges_warnings(tmp_path, digital_pdf):
     out = run_pipeline(str(renamed), "weird.txt", reporter, registry=default_registry())
     assert any("extension" in w for w in out.result.warnings)
     assert out.probe.kind == "pdf"
+
+
+# --- structural typing (title / heading / list / paragraph) ---------------
+
+
+def _extract(path):
+    extractor = PdfExtractor()
+    probe = build_probe(path, path.name)
+    plan = extractor.plan(probe)
+    return extractor.extract(probe, plan, RecordingProgressReporter())
+
+
+def test_structured_pdf_detects_headings_and_levels(structured_pdf):
+    result = _extract(structured_pdf)
+    headings = [b for b in result.blocks if b.type == "heading"]
+    texts = [b.text for b in headings]
+    assert texts[0] == "Quarterly Report"
+    assert headings[0].metadata["level"] == 1
+    findings = next(b for b in headings if b.text == "Findings")
+    assert findings.metadata["level"] == 2
+
+
+def test_structured_pdf_detects_list_items(structured_pdf):
+    result = _extract(structured_pdf)
+    items = [b.text for b in result.blocks if b.type == "list_item"]
+    assert "First bullet point" in items
+    assert "Second bullet point" in items
+    assert "Numbered item one" in items  # marker is stripped
+
+
+def test_structured_pdf_groups_paragraphs(structured_pdf):
+    result = _extract(structured_pdf)
+    paragraphs = [b.text for b in result.blocks if b.type == "paragraph"]
+    assert "This is the introduction paragraph." in paragraphs
+    assert "Revenue grew over the quarter. Costs stayed flat across teams." in paragraphs
+
+
+def test_digital_pdf_stays_paragraphs(digital_pdf):
+    """A uniform-text PDF has no headings, just a paragraph per page."""
+    result = _extract(digital_pdf)
+    assert {b.type for b in result.blocks} == {"paragraph"}

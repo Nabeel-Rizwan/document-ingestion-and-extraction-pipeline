@@ -155,6 +155,28 @@ pages → OCR"* and the UI shows it. The overall method is `pdf_text`,
 `pdf_ocr`, or `pdf_mixed`. Each block records `metadata.method` (`text`/`ocr`)
 and, for OCR, `metadata.confidence`.
 
+### Structure typing (title / paragraph / list / table)
+
+Extracted content is not flat text — blocks are typed so every output format can
+differentiate them:
+
+- **DOCX** — `heading` (with `metadata.level`), `list_item` and `table` come
+  from the document's paragraph/table styles; everything else is `paragraph`.
+- **PDF** — for digital pages the extractor reads the PDF's own layout
+  (per-fragment font size, weight and `x`/`y` position) and infers:
+  - **`heading`** — lines larger than the body font (level 1 = largest) or
+    short bold standalone lines, with `metadata.level`;
+  - **`list_item`** — lines starting with a bullet glyph or `1.` / `a)` marker
+    (the marker is stripped from the text);
+  - **`paragraph`** — consecutive lines reflowed into one block, split where the
+    vertical gap is much larger than the median line spacing.
+
+The four block types (`heading`, `paragraph`, `list_item`, `table`) are then
+rendered distinctly by every format: Markdown (`#`, `-`, pipes), HTML
+(`<h1>`, `<ul><li>`, `<table>`), plain text (`#`, `*`, tabs), CSV (a `type`
+column) and JSON (`type` + `metadata`). The UI's **Preview** tab applies the
+same headings, lists and tables.
+
 ## API reference
 
 All endpoints are under `/api/`. Errors always use

@@ -24,6 +24,27 @@ def make_digital_pdf(pages: int = 3, tmp_path: Path | None = None) -> Path:
     return path
 
 
+def make_structured_pdf(tmp_path: Path | None = None) -> Path:
+    """A PDF with a title, a section heading, paragraphs and list items."""
+    path = tmp_path / "structured.pdf" if tmp_path else Path("/tmp/structured.pdf")
+    c = rl_canvas.Canvas(str(path), pagesize=A4)
+    c.setFont("Helvetica-Bold", 20)
+    c.drawString(72, 780, "Quarterly Report")
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 750, "This is the introduction paragraph.")
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(72, 700, "Findings")
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 680, "Revenue grew over the quarter.")
+    c.drawString(72, 665, "Costs stayed flat across teams.")
+    c.drawString(72, 630, "\u2022 First bullet point")
+    c.drawString(72, 615, "\u2022 Second bullet point")
+    c.drawString(72, 600, "1. Numbered item one")
+    c.showPage()
+    c.save()
+    return path
+
+
 def make_short_text_pdf(text: str = "Hello world", tmp_path: Path | None = None) -> Path:
     """A PDF whose single page has a real but very short text layer."""
     path = tmp_path / "short.pdf" if tmp_path else Path("/tmp/short.pdf")
