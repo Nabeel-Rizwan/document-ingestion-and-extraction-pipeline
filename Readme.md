@@ -14,17 +14,20 @@ accepted-file list both derive from the extractor registry via
 
 > The original assessment brief (later replaced by this document) is preserved
 > in git history: `git show 857512e:Readme.md`.
-
-> A step-by-step run & test guide (Docker, local dev, test commands, and a
-> manual end-to-end walkthrough) lives in [`docs/RUNNING.md`](docs/RUNNING.md).
-> A deeper walkthrough of the components, tech choices and Docker setup lives
-> in [`architecture.md`](architecture.md).
+>
+> **This README is self-contained** — it has everything needed to start the
+> stack and run the tests.
 
 ## Quick start (Docker)
 
+> Run every command in this README from the **repository root** (the folder
+> containing `docker-compose.yml` and `Makefile`).
+
+Requires Docker + Docker Compose (v2) only — no Python, Node, or Postgres on
+the host. One command builds and runs everything:
+
 ```bash
-cp .env.example .env
-make up          # or: docker compose up --build -d
+docker compose up --build -d      # or: make up
 ```
 
 - Frontend / SPA: <http://localhost:8080>
@@ -48,27 +51,22 @@ The admin page is styled: Django serves `/static/` itself (wired into
 does), and the frontend nginx proxies both `/admin/` and `/static/` to the
 backend. The Docker entrypoint also runs `collectstatic --noinput`.
 
-## Local development without Docker
-
-Backend (Python 3.12):
+To stop:
 
 ```bash
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-# a Postgres 16 database must be running (see POSTGRES_* env vars)
-python manage.py makemigrations documents
-python manage.py migrate
-python manage.py run_worker &        # job processor
-uvicorn config.asgi:application --port 8000
+docker compose down               # or: make down
 ```
 
-Frontend (Node 18+):
+To stop **and** delete all data (database + uploaded files):
 
 ```bash
-cd frontend
-npm install
-npm run dev        # proxies /api to http://localhost:8000
+docker compose down -v            # or: make clean
+```
+
+To create a Django admin login (optional):
+
+```bash
+docker compose exec backend python manage.py createsuperuser
 ```
 
 ## Architecture
@@ -198,6 +196,20 @@ All endpoints are under `/api/`. Errors always use
 | `agent/tools/` | GET | OpenAI-style function schemas |
 | `agent/tools/call/` | POST | `{name, arguments}` → JSON result |
 
+### Error codes
+
+| HTTP | `error.code` | Meaning |
+| --- | --- | --- |
+| 400 | `bad_request` | missing `file`, empty file, bad `page`, bad query/format |
+| 404 | `not_found` | unknown document id |
+| 409 | `not_ready` | content requested before `status=done` |
+| 413 | `too_large` | file exceeds `MAX_UPLOAD_BYTES` |
+| 415 | `unsupported_type` | sniffed kind has no registered extractor |
+
+A failed document's `error_code` is one of `corrupt`, `encrypted`,
+`unsupported`, `empty` (permanent, never retried) or `internal` (transient,
+retried up to `WORKER_MAX_ATTEMPTS` then failed).
+
 ### Document shape
 
 ```json
@@ -311,27 +323,87 @@ on `can_handle`/`declared_ext` exactly as the txt example above.
 
 ## Tests
 
-Backend (pure Python pipeline + Django/API tests against Postgres):
+All tests run in Docker — no host Python or Node needed.
 
 ```bash
-cd backend && pytest tests
+make test              # backend suite (114) + frontend typecheck/tests (25)
+make backend-test      # backend only; starts Postgres for you
+make frontend-test     # frontend typecheck + unit tests
 ```
 
-Run only the pure-Python pipeline tests (no database needed):
+The backend suite runs inside the project image with the source bind-mounted
+and a real Postgres (started automatically). The frontend suite builds the
+image's `test` stage. If a backend run is interrupted and leaves a stale test
+database, reset it with `docker compose down -v` (or `make clean`) and re-run.
 
-```bash
-cd backend && pytest tests/pipeline
-```
+### What the tests check
 
-Frontend:
+139 automated tests in total — **114 backend** (59 pipeline + 55 API) and
+**25 frontend** — grouped below by suite.
 
-```bash
-cd frontend && npm run typecheck && npm test && npm run build
-```
+**Backend pipeline core** — `backend/tests/pipeline`, 59 tests, no database:
 
-The queue concurrency and SSE tests use real transactions/threads, so the test
-database is dropped between runs — use `pytest --create-db` if you see stale
-database errors after an interrupted run.
+- **Sniffing** (`test_probe.py`) — a DOCX renamed `.pdf` is still DOCX (and
+  warns); a PDF renamed `.docx` is still PDF; a plain ZIP is not a DOCX; random
+  bytes are unsupported; empty files raise `EmptyDocumentError`.
+- **PDF extraction** (`test_pdf.py`) — per-page routing (text / OCR / mixed);
+  **only scanned pages are OCR'd**; methods `pdf_text` / `pdf_ocr` /
+  `pdf_mixed`; page + method metadata and OCR confidence; low-confidence
+  warnings; encrypted/truncated errors; monotonic progress; and **structure
+  typing** (font-size headings with levels, bullet/numbered list items,
+  reflowed paragraphs — while a uniform-text PDF stays all-paragraph).
+- **DOCX extraction** (`test_docx.py`) — document-order interleaving of
+  headings, paragraphs, lists and tables; heading levels; table cell metadata;
+  null page fields; embedded-image warnings; corrupt-DOCX errors; plain-ZIP
+  rejection.
+- **Page classifier** (`test_pdf_classifier.py`) — the text-vs-OCR decision at
+  its thresholds: sparse text over an image → OCR, short clean text with no
+  image → text, empty/garbled → OCR.
+- **OCR wrapper** (`test_ocr.py`) — the Tesseract client (pytesseract stubbed):
+  text and normalized mean confidence, `-1` tokens ignored, language/`--psm`
+  passed through.
+- **Registry & renderers** (`test_registry_and_renderers.py`) — the registry
+  contract, unsupported-kind error, routing, that one new extractor is enough
+  to add a format, and the Markdown/HTML/CSV renderers (escaping, page markers,
+  tables).
+
+**Backend API** — `backend/tests/api`, 55 tests, against Postgres:
+
+- **Upload** (`test_upload.py`) — `202` queued, wrong-extension warning,
+  `415 unsupported_type`, `400` empty/missing, `413 too_large`, duplicate
+  SHA-256 returns the same id, list/retrieve/delete, `404`, pagination.
+- **Content** (`test_content.py`) — json / markdown / text / html / csv,
+  `?page=`, `download=1` attachment, unknown format `400`, `409 not_ready`,
+  download bytes, search headlines with `⟦ ⟧`, `/api/config/`, the exact
+  serializer fields, and that a short real-text PDF is **not** sent to OCR.
+- **Failures** (`test_failures.py`) — permanent errors (corrupt/encrypted) fail
+  once with an `error_code`; transient errors retry to `WORKER_MAX_ATTEMPTS`
+  then fail `internal`, emitting a failed `ProgressEvent`.
+- **Queue** (`test_queue.py`) — distinct claims then `None`, stale-lock
+  re-queueing, and **three real threads never claim the same job**
+  (`SELECT … FOR UPDATE SKIP LOCKED`).
+- **SSE** (`test_sse.py`) — emits `done`/`failed` and closes, streams a live
+  background job, handles unknown ids, sets the no-buffering headers.
+- **OCR engine / admin / agent tools** (`test_ocr_engine.py`, `test_admin.py`,
+  `test_agent_tools.py`) — `OCR_ENGINE` selects Tesseract or the mock (with a
+  mock fallback); the admin page + static assets load; the four agent tools and
+  their structured `{"error": …}` responses.
+
+**Frontend** — `frontend/src/**/*.test.ts(x)`, 25 tests, Vitest + Testing Library:
+
+- **Status/progress** (`StatusBadge.test.tsx`) — badges render per status; the
+  progress bar shows the percent, ARIA values, and clamps 0–100.
+- **Dropzone** (`UploadDropzone.test.tsx`) — supported files pass through;
+  unsupported/oversize files are rejected with messages.
+- **Content viewer** (`ContentViewer.test.tsx`) — the preview renders blocks and
+  groups list items into a `<ul>`; every export-format tab
+  (Preview/HTML/Markdown/Plain text/CSV/JSON) works with `download=1`.
+- **Live updates** (`useDocumentEvents.test.tsx`, `useUploadQueue.test.tsx`) —
+  the SSE hook patches the cache and **falls back to polling** on error; the
+  upload queue tracks per-file **byte progress** then
+  accepted/duplicate/rejected.
+- **Search** (`highlight.test.ts`) — `⟦ ⟧` headline markers split into `<mark>`
+  segments, with HTML kept inert.
 
 ## Known limitations
 
@@ -340,8 +412,8 @@ database errors after an interrupted run.
 - **Local disk storage** — raw files live on a shared `media` volume; the
   pipeline already works from a filesystem path (`documents/storage.py`), so
   moving to S3 means changing the storage backend only.
-- **DB-backed job queue** — fine at this scale; a dedicated queue would be the
-  next step (see `docs/ANSWERS.md`).
+- **DB-backed job queue** — fine at this scale; a dedicated broker-backed queue
+  would be the next step.
 - **Local OCR** — real OCR runs through Tesseract (`pipeline/ocr/tesseract.py`)
   behind the `OcrClient` interface; `OCR_ENGINE=mock` (used by the test suite)
   returns canned text. A cloud engine would be one new `OcrClient`, with no
@@ -349,3 +421,19 @@ database errors after an interrupted run.
 - **No virus scanning** of uploads.
 - **SSE fan-out** — progress events are read per-client from Postgres rather
   than pushed via a broker.
+
+## Troubleshooting
+
+- **First `docker compose up --build` is slow / needs network** — the images
+  pull base layers and install Tesseract (apt), Python (pip) and Node (npm)
+  dependencies. Subsequent builds are cached.
+- **Ports already in use** — stop whatever is on `8080`, `8000` or `5432`, or
+  change the mappings in `docker-compose.yml`.
+- **`ModuleNotFoundError: No module named 'pytest'`** — you're running `pytest`
+  on the host. Use `make backend-test`, which runs in Docker.
+- **`database "test_documents" already exists`** — reset with
+  `docker compose down -v` (or `make clean`) and re-run.
+- **Upload returns 500 `PermissionError: /media`** — rebuild the images:
+  `docker compose build backend worker`.
+- **Reset everything** — `docker compose down -v` (or `make clean`) deletes the
+  database volume and uploaded files.

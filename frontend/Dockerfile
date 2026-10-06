@@ -1,10 +1,19 @@
-# Build stage
-FROM node:20-alpine AS build
+# Shared dependency install
+FROM node:20-alpine AS deps
 
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
 RUN npm ci || npm install
+
+# Test stage: typecheck + unit tests (build with `--target test`)
+FROM deps AS test
+
+COPY . .
+RUN npm run typecheck && npm test
+
+# Build stage
+FROM deps AS build
 
 COPY . .
 RUN npm run build
