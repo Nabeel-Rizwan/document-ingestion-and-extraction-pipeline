@@ -48,17 +48,23 @@ def test_docx_page_fields_null(docx):
     assert result.method == "docx"
 
 
-def test_docx_image_warning(tmp_path):
+def test_docx_image_is_ocr_extracted(tmp_path):
     from tests.factories import make_docx
 
     path = make_docx(tmp_path=tmp_path, include_image=True)
     result = _extract(path)
-    assert any("embedded image" in w for w in result.warnings)
+    # The embedded image is OCR'd into a text block instead of being warned about.
+    ocr_blocks = [b for b in result.blocks if b.metadata.get("method") == "ocr"]
+    assert ocr_blocks
+    assert "[MOCK OCR]" in ocr_blocks[0].text
+    assert ocr_blocks[0].metadata["confidence"] == 0.92
+    assert not any("were not extracted" in w for w in result.warnings)
 
 
 def test_docx_no_image_warning(docx):
     result = _extract(docx)
     assert not any("image" in w for w in result.warnings)
+    assert not any(b.metadata.get("method") == "ocr" for b in result.blocks)
 
 
 def test_corrupt_docx_raises(tmp_path):
