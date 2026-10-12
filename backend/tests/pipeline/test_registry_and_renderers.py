@@ -1,4 +1,17 @@
-"""Tests for the registry, routing, renderers, and adding a new format."""
+"""Tests for the registry, routing, renderers, and adding a new format.
+
+What it does:
+    Verifies ExtractorRegistry.describe()/select(), route() wiring, all four
+    renderers (markdown/text/html/csv incl. escaping/grouping), and that a
+    brand-new format only needs a new Extractor class (open/closed demo).
+
+How it works:
+    - Registry/routing tests use real fixtures + build_probe + default_registry.
+    - Renderer tests build tiny in-memory Block lists via _blocks() and assert
+      on exact markdown/HTML/CSV strings (escaping, grouping, headers).
+    - The txt test defines an inline TxtExtractor, registers it, and runs the
+      full run_pipeline to prove no router changes were needed.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +30,9 @@ from pipeline.progress import RecordingProgressReporter
 
 
 def test_registry_describe_contract():
+    # What: default registry advertises exactly pdf + docx with extensions/mimes.
+    # How: calls describe(), indexes by kind, asserts kind set + pdf
+    #   extensions + docx mime prefix.
     registry = default_registry()
     described = registry.describe()
     by_kind = {d["kind"]: d for d in described}
@@ -26,6 +42,9 @@ def test_registry_describe_contract():
 
 
 def test_registry_select_unsupported(random_binary):
+    # What: unknowable bytes raise UnsupportedFormatError with code.
+    # How: probes random bytes, asserts select() raises and exc.code is
+    #   "unsupported".
     registry = default_registry()
     probe = build_probe(random_binary, "random.bin")
     with pytest.raises(UnsupportedFormatError) as exc:
@@ -34,6 +53,9 @@ def test_registry_select_unsupported(random_binary):
 
 
 def test_route_returns_extractor_and_plan(digital_pdf):
+    # What: route() picks the pdf extractor and a 3-unit plan for digital PDF.
+    # How: probes the digital fixture, routes via default registry, asserts
+    #   extractor name + plan units.
     registry = default_registry()
     probe = build_probe(digital_pdf, digital_pdf.name)
     extractor, plan = route(probe, registry)
@@ -43,6 +65,10 @@ def test_route_returns_extractor_and_plan(digital_pdf):
 
 def test_new_format_needs_only_new_extractor(tmp_path):
     """A toy TxtExtractor registered in-test proves adding a format is cheap."""
+    # What: proves extensibility - registering one class enables .txt end to end.
+    # How: defines an inline TxtExtractor (can_handle via declared_ext
+    #   fallback), registers it on a fresh registry, runs run_pipeline on a
+    #   notes.txt file and asserts method + text survive.
 
     class TxtExtractor:
         name = "txt"
@@ -57,9 +83,12 @@ def test_new_format_needs_only_new_extractor(tmp_path):
             return probe.kind == "txt" or (probe.kind is None and probe.declared_ext == ".txt")
 
         def plan(self, probe):
+            # What: single-unit text plan. How: returns a fixed ExtractionPlan.
             return ExtractionPlan(extractor="txt", units=1, strategies=["text"], summary="TXT")
 
         def extract(self, probe, plan, progress):
+            # What: reads the whole file as one paragraph block.
+            # How: read_text() -> single Block with empty metadata.
             text = probe.path.read_text()
             return ExtractionResult(
                 blocks=[Block(type="paragraph", text=text, metadata={})],
@@ -87,6 +116,10 @@ def test_new_format_needs_only_new_extractor(tmp_path):
 
 
 def _blocks():
+    # What: canonical 4-block sample (heading/paragraph/list/table) reused by
+    #   every renderer test so expectations stay comparable.
+    # How: returns fresh Block objects; table carries rows metadata for
+    #   markdown/HTML table rendering.
     return [
         Block(type="heading", text="Title", metadata={"level": 1}),
         Block(type="paragraph", text="intro", page=1),
@@ -100,6 +133,9 @@ def _blocks():
 
 
 def test_render_markdown_headings_and_tables():
+    # What: markdown maps heading->"# ", list->"- ", table->pipe table.
+    # How: renders _blocks(), asserts "# Title", "- item one", header row
+    #   "| a | b |" and separator "| --- | --- |" all present.
     md = render_markdown(_blocks())
     assert "# Title" in md
     assert "- item one" in md
@@ -108,6 +144,9 @@ def test_render_markdown_headings_and_tables():
 
 
 def test_render_markdown_page_markers():
+    # What: page changes emit "<!-- page N -->" + "---" separators, once per page.
+    # How: renders 3 paragraphs across pages 1,2,2; asserts both markers + ---
+    #   exist and the marker count is exactly 2 (not per-block).
     blocks = [
         Block(type="paragraph", text="first", page=1),
         Block(type="paragraph", text="second", page=2),
@@ -122,6 +161,8 @@ def test_render_markdown_page_markers():
 
 
 def test_render_markdown_table_escapes_pipes():
+    # What: literal "|" inside table cells is backslash-escaped in markdown.
+    # How: renders a 1-cell table containing "a|b", asserts "a\\|b" output.
     blocks = [
         Block(type="table", text="x", metadata={"rows": [["a|b"]]}),
     ]
@@ -130,6 +171,9 @@ def test_render_markdown_table_escapes_pipes():
 
 
 def test_render_text_basic():
+    # What: plain-text renderer keeps heading/list/table affordances as text.
+    # How: renders _blocks(), asserts "# Title", "* item one" and tab-joined
+    #   table rows "a\\tb" / "1\\t2".
     text = render_text(_blocks())
     assert "# Title" in text
     assert "* item one" in text
@@ -138,6 +182,8 @@ def test_render_text_basic():
 
 
 def test_render_text_no_page_markers():
+    # What: text output never contains HTML page-marker comments.
+    # How: renders a single paged paragraph, asserts "<!--" absent.
     blocks = [Block(type="paragraph", text="x", page=1)]
     assert "<!--" not in render_text(blocks)
 
@@ -146,6 +192,9 @@ def test_render_text_no_page_markers():
 
 
 def test_render_html_structure_and_groups_lists():
+    # What: HTML maps blocks to h1/p/ul+li/table and groups adjacent <li>s.
+    # How: renders _blocks(), asserts <h1>/<p>/<ul>/<li> present, only one
+    #   <ul> wrapper (grouped), and table headers/cells present.
     html = render_html(_blocks())
     assert "<h1>Title</h1>" in html
     assert "<p>intro</p>" in html
@@ -155,6 +204,9 @@ def test_render_html_structure_and_groups_lists():
 
 
 def test_render_html_escapes_text():
+    # What: HTML-escapes block text to prevent XSS (script stays inert).
+    # How: renders a paragraph containing <script> + & + quotes, asserts raw
+    #   "<script>" gone and escaped "&lt;script&gt;" + "&amp;" present.
     blocks = [Block(type="paragraph", text="<script>alert(1)</script> & \"quote\"")]
     html = render_html(blocks)
     assert "<script>" not in html
@@ -163,6 +215,9 @@ def test_render_html_escapes_text():
 
 
 def test_render_html_page_breaks():
+    # What: page changes emit data-page attrs + page-break markers per page.
+    # How: renders 2 paragraphs on pages 1/2, asserts both data-page attrs
+    #   and exactly 2 "page-break" occurrences.
     blocks = [
         Block(type="paragraph", text="a", page=1),
         Block(type="paragraph", text="b", page=2),
@@ -177,6 +232,9 @@ def test_render_html_page_breaks():
 
 
 def test_render_csv_has_header_and_row_per_block():
+    # What: CSV has a header + one row per block with idx/type/page/text.
+    # How: parses render_csv(_blocks()) with csv.reader, asserts header list,
+    #   total 5 rows (header+4), and spot-checks rows 1 and 3.
     import csv as _csv
     from io import StringIO
 
@@ -188,6 +246,9 @@ def test_render_csv_has_header_and_row_per_block():
 
 
 def test_render_csv_reports_ocr_confidence():
+    # What: OCR method + confidence survive into their CSV columns.
+    # How: renders one OCR paragraph (0.91), parses CSV, asserts columns 3/4
+    #   equal "ocr" / "0.91".
     from io import StringIO
     import csv as _csv
 
