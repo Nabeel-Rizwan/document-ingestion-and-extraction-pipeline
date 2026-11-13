@@ -199,8 +199,13 @@ class DocumentViewSet(viewsets.ViewSet):
 
         # Use the injected registry or the project default.
         registry = self.registry or default_registry()
-        # Reject file kinds the pipeline cannot process.
-        if probe.kind not in registry.supported_kinds():
+        # Reject files no extractor can handle (respects extension fallback,
+        # e.g. plain text has kind=None and routes by declared .txt).
+        from pipeline.errors import UnsupportedFormatError
+
+        try:
+            registry.select(probe)
+        except UnsupportedFormatError:
             raise ContractError(
                 "unsupported_type",
                 f"Unsupported file type (kind={probe.kind!r}).",

@@ -253,15 +253,17 @@ def test_search_requires_query(api_client):
 @pytest.mark.django_db
 def test_config_lists_pdf_and_docx(api_client):
     # What: /api/config/ advertises limits + supported kinds.
-    # How: GETs config, asserts max_upload_bytes>0, kinds=={pdf,docx}, and
-    #   the pdf entry lists .pdf in extensions.
+    # How: GETs config, asserts max_upload_bytes>0, kinds=={pdf,docx,txt}, and
+    #   the pdf entry lists .pdf in extensions plus txt lists .txt.
     resp = api_client.get("/api/config/")
     assert resp.status_code == 200
     assert resp.data["max_upload_bytes"] > 0
     kinds = {d["kind"] for d in resp.data["supported"]}
-    assert kinds == {"pdf", "docx"}
+    assert kinds == {"pdf", "docx", "txt"}
     pdf = next(d for d in resp.data["supported"] if d["kind"] == "pdf")
     assert ".pdf" in pdf["extensions"]
+    txt = next(d for d in resp.data["supported"] if d["kind"] == "txt")
+    assert ".txt" in txt["extensions"]
 
 
 @pytest.mark.django_db

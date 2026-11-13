@@ -30,15 +30,17 @@ from pipeline.progress import RecordingProgressReporter
 
 
 def test_registry_describe_contract():
-    # What: default registry advertises exactly pdf + docx with extensions/mimes.
+    # What: default registry advertises exactly pdf + docx + txt with extensions/mimes.
     # How: calls describe(), indexes by kind, asserts kind set + pdf
-    #   extensions + docx mime prefix.
+    #   extensions + docx mime prefix + txt plain-text mime.
     registry = default_registry()
     described = registry.describe()
     by_kind = {d["kind"]: d for d in described}
-    assert set(by_kind) == {"pdf", "docx"}
+    assert set(by_kind) == {"pdf", "docx", "txt"}
     assert by_kind["pdf"]["extensions"] == [".pdf"]
     assert by_kind["docx"]["mime_types"][0].startswith("application/vnd")
+    assert by_kind["txt"]["extensions"] == [".txt"]
+    assert by_kind["txt"]["mime_types"] == ["text/plain"]
 
 
 def test_registry_select_unsupported(random_binary):

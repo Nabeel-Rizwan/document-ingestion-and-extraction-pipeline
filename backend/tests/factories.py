@@ -215,3 +215,12 @@ def make_binary(tmp_path: Path | None = None, ext: str = ".bin") -> Path:
     path = tmp_path / f"random{ext}" if tmp_path else Path(f"/tmp/random{ext}")
     path.write_bytes(os.urandom(128))
     return path
+
+
+def make_plain_txt(text: str = "Hello world\nSecond line", tmp_path: Path | None = None) -> Path:
+    # What: plain-text fixture for the TXT extractor path.
+    # How: writes UTF-8 text verbatim; probe sniffs kind=None and routing
+    #   falls back to the .txt extension.
+    path = tmp_path / "notes.txt" if tmp_path else Path("/tmp/notes.txt")
+    path.write_text(text, encoding="utf-8")
+    return path

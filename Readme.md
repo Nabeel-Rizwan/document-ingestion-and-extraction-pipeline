@@ -15,6 +15,8 @@ mocked behind an interface.
 
 ## 2. Quick start (Docker, everything in one command)
 
+Start docker
+
 ```bash
 cp .env.example .env
 make up                 # or: docker compose up --build -d

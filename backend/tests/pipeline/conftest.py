@@ -23,6 +23,7 @@ from tests.factories import (
     make_encrypted_pdf,
     make_garbled_pdf,
     make_mixed_pdf,
+    make_plain_txt,
     make_plain_zip,
     make_scanned_pdf,
     make_short_text_pdf,
@@ -95,6 +96,12 @@ def plain_zip(tmp_path):
 def random_binary(tmp_path):
     # What: 128 random bytes. How: factory writes os.urandom output.
     return make_binary(tmp_path=tmp_path)
+
+
+@pytest.fixture
+def plain_txt(tmp_path):
+    # What: two-line UTF-8 text file. How: factory writes canned text.
+    return make_plain_txt(tmp_path=tmp_path)
 
 
 __all__ = [

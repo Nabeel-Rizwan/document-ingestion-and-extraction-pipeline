@@ -31,6 +31,7 @@ from tests.factories import (
     make_docx,
     make_encrypted_pdf,
     make_mixed_pdf,
+    make_plain_txt,
     make_scanned_pdf,
     make_truncated_pdf,
 )
@@ -109,6 +110,13 @@ def truncated_pdf(tmp_path):
     # What: structurally broken PDF for the corrupt error path.
     # How: delegates to the factory with tmp_path isolation.
     return make_truncated_pdf(tmp_path=tmp_path)
+
+
+@pytest.fixture
+def plain_txt(tmp_path):
+    # What: two-line UTF-8 text file for the TXT path.
+    # How: delegates to the factory with tmp_path isolation.
+    return make_plain_txt(tmp_path=tmp_path)
 
 
 @pytest.fixture

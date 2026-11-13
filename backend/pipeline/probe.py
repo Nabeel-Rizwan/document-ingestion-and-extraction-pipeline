@@ -2,7 +2,8 @@
 
 File extensions are never trusted. We sniff the first bytes of the file to
 decide whether it is really a PDF or a DOCX (a ZIP containing
-``word/document.xml``). Anything else gets ``kind=None`` and is rejected later
+``word/document.xml``). Anything else gets ``kind=None``; plain-text (.txt)
+files are routed later by their declared extension, the rest are rejected
 by the router.
 """
 

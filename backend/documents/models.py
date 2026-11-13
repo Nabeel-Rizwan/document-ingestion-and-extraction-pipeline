@@ -27,7 +27,7 @@ DOCUMENT_STATUSES = ("queued", "processing", "done", "failed")
 # Pipeline stages a document passes through; note statuses and stages differ.
 STAGES = ("queued", "detecting", "extracting", "indexing", "done", "failed")
 # Extraction methods; the empty string means "not yet determined".
-METHODS = ("", "pdf_text", "pdf_ocr", "pdf_mixed", "docx")
+METHODS = ("", "pdf_text", "pdf_ocr", "pdf_mixed", "docx", "txt")
 # Stable error codes; the empty string means "no error".
 ERROR_CODES = ("", "corrupt", "encrypted", "unsupported", "empty", "internal")
 
@@ -103,6 +103,8 @@ class Block(models.Model):
     # Precomputed Postgres tsvector for full-text search; populated by the pipeline.
     # null=True allows rows created before the search update; editable=False hides it.
     search = SearchVectorField(null=True, editable=False)
+
+    
 
     class Meta:
         # Default ordering by position within the document.

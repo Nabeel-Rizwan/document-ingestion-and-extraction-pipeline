@@ -73,10 +73,13 @@ def default_registry(ocr: OcrClient | None = None) -> ExtractorRegistry:
     # Imports are deferred to avoid loading extractors (and OCR deps) at import time.
     from .extractors.pdf import PdfExtractor
     from .extractors.docx import DocxExtractor
+    from .extractors.txt import TxtExtractor
 
     registry = ExtractorRegistry()
     # PDF extractor may receive the shared OCR client for scanned pages.
     registry.register(PdfExtractor(ocr=ocr))
     # DOCX extractor uses the same client to OCR embedded images.
     registry.register(DocxExtractor(ocr=ocr))
+    # Plain-text extractor needs no OCR; routed by .txt extension.
+    registry.register(TxtExtractor())
     return registry
